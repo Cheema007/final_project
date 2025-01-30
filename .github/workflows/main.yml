@@ -1,0 +1,81 @@
+name: CICD Pipeline
+
+on:
+  push:
+    branches:
+    - main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    # Step 1: Checkout code
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    # Step 2: Set up Docker
+    - name: Set up Docker
+      uses: docker/setup-buildx-action@v2
+
+    # Step 3: Log in to Docker Hub
+    - name: Log in to Docker Hub
+      run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
+
+    # Step 4: Build Docker images
+    - name: Build Docker images
+      run: |
+        docker build -t ${{ secrets.DOCKER_USERNAME }}/expensy-backend:latest ./expensy_backend
+        docker build -t ${{ secrets.DOCKER_USERNAME }}/expensy-frontend:latest ./expensy_frontend
+
+    # Step 5: Push Docker images
+    - name: Push Docker images
+      run: |
+        docker push ${{ secrets.DOCKER_USERNAME }}/expensy-backend:latest
+        docker push ${{ secrets.DOCKER_USERNAME }}/expensy-frontend:latest
+
+  deploy:
+    runs-on: self-hosted
+    needs: build
+
+    steps:
+    # Step 1: Checkout code
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    # step 2: Add the steps to connect to the EC2 instance (with docker installed)
+    - name: Set up AWS CLI
+      uses: aws-actions/configure-aws-credentials@v1
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: 'ap-northeast-3'
+
+    - name: Update kubeconfig
+      run: aws eks update-kubeconfig --region ap-northeast-3 --name expense-tracker-cluster
+      env:
+        AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+    - name: Set up SSH private key
+      run: |
+        mkdir -p ~/.ssh
+        echo "${{ secrets.EC2_KEY }}" > ~/.ssh/osaka.pem
+        chmod 600 ~/.ssh/osaka.pem  # Set appropriate permissions for the private key
+        # ssh-keyscan -H ${{ secrets.EC2_HOST }} >> ~/.ssh/known_hosts
+    - name: Deploy to EC2
+
+      run: |+
+        ssh -i ~/.ssh/osaka.pem ubuntu@${{ secrets.EC2_HOST }} << 'EOF'
+          rm -rf final_project_deveops
+          git clone https://github.com/Cheema007/final_project.git
+          
+          cd final_project
+
+        EOF
+
+         
+    - name: Deploy to EKS
+      run: |
+        cd ~/final_project
+          kubectl apply -f expense-tracker.yaml
+          kubectl apply -f backend-hpa.yaml
