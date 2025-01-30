@@ -1,0 +1,287 @@
+#########################################
+# expense-tracker.yaml
+#########################################
+
+# -----------------------------------------------------
+# 1) NAMESPACE
+# -----------------------------------------------------
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: expense-tracker
+
+---
+# -----------------------------------------------------
+# 2) CONFIGMAP (Non-sensitive info)
+# -----------------------------------------------------
+# Store things like connection URIs that are not strictly confidential.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: expense-config
+  namespace: expense-tracker
+data:
+  # For the backend, referencing Docker Compose variable name "DATABASE_URI"
+  DATABASE_URI: "mongodb://root:example@mongo-service:27017"
+
+---
+# -----------------------------------------------------
+# 3) SECRET (Sensitive info)
+# -----------------------------------------------------
+# Passwords, tokens, etc. We base64-encode automatically using 'stringData'
+apiVersion: v1
+kind: Secret
+metadata:
+  name: expense-secrets
+  namespace: expense-tracker
+type: Opaque
+stringData:
+  mongo-root-password: "example"     
+  redis-password: "someredispassword"    
+  # If you want to store the DB URI here too, you can do so instead of the ConfigMap.
+
+---
+# -----------------------------------------------------
+# 4) MONGODB DEPLOYMENT
+# -----------------------------------------------------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mongo-deployment
+  namespace: expense-tracker
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: expense-mongodb
+  template:
+    metadata:
+      labels:
+        app: expense-mongodb
+    spec:
+      containers:
+        - name: mongo
+          image: "mongo:latest"
+          ports:
+            - containerPort: 27017
+          env:
+            # Using the same credentials as Docker Compose
+            - name: MONGO_INITDB_ROOT_USERNAME
+              value: "root"
+            - name: MONGO_INITDB_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: expense-secrets
+                  key: mongo-root-password
+          volumeMounts:
+            - name: mongo-data
+              mountPath: /data/db
+      volumes:
+        - name: mongo-data
+          persistentVolumeClaim:
+            claimName: mongo-pvc
+
+---
+# -----------------------------------------------------
+# 5) MONGODB SERVICE
+# -----------------------------------------------------
+apiVersion: v1
+kind: Service
+metadata:
+  name: mongo-service
+  namespace: expense-tracker
+spec:
+  type: ClusterIP
+  selector:
+    app: expense-mongodb
+  ports:
+    - port: 27017
+      targetPort: 27017
+      protocol: TCP
+
+---
+# -----------------------------------------------------
+# 6) REDIS DEPLOYMENT
+# -----------------------------------------------------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis-deployment
+  namespace: expense-tracker
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: expense-redis
+  template:
+    metadata:
+      labels:
+        app: expense-redis
+    spec:
+      containers:
+        - name: redis
+          image: "redis:latest"
+          ports:
+            - containerPort: 6379
+          # In order to use password as in the docker compose, we need to provide a command that enforces authentication
+          command: [ "redis-server", "--requirepass", "$(REDIS_PASSWORD)" ]
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: expense-secrets
+                  key: redis-password
+
+---
+# -----------------------------------------------------
+# 7) REDIS SERVICE
+# -----------------------------------------------------
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-service
+  namespace: expense-tracker
+spec:
+  type: ClusterIP
+  selector:
+    app: expense-redis
+  ports:
+    - port: 6379
+      targetPort: 6379
+      protocol: TCP
+
+---
+# -----------------------------------------------------
+# 8) BACKEND DEPLOYMENT
+# -----------------------------------------------------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend-deployment
+  namespace: expense-tracker
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: expense-backend
+  template:
+    metadata:
+      labels:
+        app: expense-backend
+    spec:
+      containers:
+        - name: expense-backend
+          image: "festusinvitesu/expensy-backend:latest"
+          ports:
+            - containerPort: 8706   
+          env:
+            - name: DATABASE_URI
+              valueFrom:
+                configMapKeyRef:
+                  name: expense-config
+                  key: DATABASE_URI
+            - name: REDIS_HOST
+              value: "redis-service"
+            - name: REDIS_PORT
+              value: "6379"
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: expense-secrets
+                  key: redis-password
+
+
+---
+# -----------------------------------------------------
+# 9) BACKEND SERVICE
+# -----------------------------------------------------
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend-service
+  namespace: expense-tracker
+spec:
+  type: LoadBalancer
+  selector:
+    app: expense-backend
+  ports:
+    - port: 8706
+      targetPort: 8706
+      protocol: TCP
+
+---
+# -----------------------------------------------------
+# 10) FRONTEND DEPLOYMENT
+# -----------------------------------------------------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend-deployment
+  namespace: expense-tracker
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: expense-frontend
+  template:
+    metadata:
+      labels:
+        app: expense-frontend
+    spec:
+      containers:
+        - name: expense-frontend
+          image: "festusinvitesu/expensy-frontend:latest"
+          ports:
+            - containerPort: 3000
+          env:
+            - name: NEXT_PUBLIC_API_URL
+              value: "http://a934b0db0dbb341dfba7f0638037ff5b-979799197.ap-northeast-3.elb.amazonaws.com:8706"
+
+---
+# -----------------------------------------------------
+# 11) FRONTEND SERVICE
+# -----------------------------------------------------
+apiVersion: v1
+kind: Service
+metadata:
+  name: frontend-service
+  namespace: expense-tracker
+spec:
+  # Use LoadBalancer in EKS to get a public endpoint via an AWS ELB
+  type: LoadBalancer
+  selector:
+    app: expense-frontend
+  ports:
+    - port: 80
+      targetPort: 3000
+      protocol: TCP
+
+---
+
+# -----------------------------------------------------
+# 12) STORAGECLASS
+# -----------------------------------------------------
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: ebs-sc
+provisioner: ebs.csi.aws.com
+volumeBindingMode: WaitForFirstConsumer
+
+---
+
+# -----------------------------------------------------
+# 13) PERSISTENTVOLUMECLAIM
+# -----------------------------------------------------
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mongo-pvc
+  namespace: expense-tracker
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: ebs-sc
+  resources:
+    requests:
+      storage: 5Gi

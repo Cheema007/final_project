@@ -1,0 +1,55 @@
+services:
+  frontend:
+    image: festusinvitesu/expensy-frontend:latest
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+    networks:
+      - app-network
+
+  backend:
+    image: festusinvitesu/expensy-backend:latest    
+    ports:
+      - "8706:8706"
+    depends_on:
+      - mongo
+      - redis
+    environment:
+      - DATABASE_URI=mongodb://root:example@mongo:27017
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=someredispassword
+    networks:
+      - app-network
+
+  mongo:
+    image: mongo
+    container_name: mongodb
+    restart: always
+    ports:
+      - "27017:27017"
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=root
+      - MONGO_INITDB_ROOT_PASSWORD=example
+    networks:
+      - app-network
+    volumes:
+      - mongo-data:/data/db
+
+  redis:
+    image: redis
+    container_name: redis-cache
+    restart: always
+    ports:
+      - "6379:6379"
+    
+    networks:
+      - app-network
+
+volumes:
+  mongo-data:
+
+networks:
+  app-network:
+    driver: bridge

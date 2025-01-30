@@ -1,0 +1,11 @@
+# Build the images
+docker build -t festusinvitesu/expensy-frontend:latest ./expensy_frontend
+docker build -t festusinvitesu/expensy-backend:latest ./expensy_backend
+
+# Push the images to dockerhub repository
+docker push festusinvitesu/expensy-frontend:latest
+docker push festusinvitesu/expensy-backend:latest
+
+
+
+
